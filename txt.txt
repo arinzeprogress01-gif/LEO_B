@@ -1,0 +1,1 @@
+npm pkg set scripts.start="node server.js" scripts.dev="nodemon server.js" type="module" ... edoiting package.json
