@@ -40,6 +40,8 @@ app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "LEO API is running.",
+    deployment: "gemini-model-check-v2",
+    models: MODELS,
   });
 });
 
