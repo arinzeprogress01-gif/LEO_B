@@ -15,7 +15,15 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenAI({
+  apiKey,
+  httpOptions: {
+    timeout: 12000,
+    retryOptions: {
+      attempts: 1,
+    },
+  },
+});
 
 const MODELS = [
   "gemini-3.8-flash",
@@ -116,7 +124,7 @@ async function generateTranslation(prompt) {
       }
 
       console.log(
-        `Primary model UNAVALIABLE. Trying backup: ${MODELS[index + 1]}`
+        `Primary model UNAVAILABLE. Trying backup: ${MODELS[index + 1]}`
       );
     }
   }
