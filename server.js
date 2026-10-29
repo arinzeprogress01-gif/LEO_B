@@ -48,7 +48,7 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     success: true,
-    message: "LEO backend is healthy.",
+    message: "LEO backend is Healthy.",
   });
 });
 
@@ -116,7 +116,7 @@ async function generateTranslation(prompt) {
       }
 
       console.log(
-        `Primary model unavailable. Trying backup: ${MODELS[index + 1]}`
+        `Primary model UNAVALIABLE. Trying backup: ${MODELS[index + 1]}`
       );
     }
   }
