@@ -1,7 +1,8 @@
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 
 dotenv.config();
 
@@ -9,29 +10,26 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 // ==========================================
-// 1. GEMINI CONFIGURATION
+// 1. GROQ CONFIGURATION
 // ==========================================
 
-const apiKey = process.env.LEO_GEMINI_API_KEY;
+const groqApiKey = process.env.LEO_GROQ_API_KEY;
 
-if (!apiKey) {
-  console.error("Missing LEO_GEMINI_API_KEY in .env");
+if (!groqApiKey) {
+  console.error("Missing LEO_GROQ_API_KEY in .env");
   process.exit(1);
 }
 
-const ai = new GoogleGenAI({
-  apiKey,
-  httpOptions: {
-    timeout: 12000,
-    retryOptions: {
-      attempts: 1,
-    },
-  },
+const groq = new Groq({
+  apiKey: groqApiKey,
+  timeout: 12000,
+  maxRetries: 0,
 });
 
-const MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.6-flash",
+// Primary model first, backup second.
+const GROQ_MODELS = [
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
 ];
 
 // ==========================================
@@ -57,20 +55,14 @@ app.use(cors());
 app.use(express.json({ limit: "20kb" }));
 
 // ==========================================
-// 4. TRANSLATION CACHE
+// 4. TRANSLATION CACHE (LRU MECHANISM)
 // ==========================================
 
 const translationCache = new Map();
 
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
 
-/**
- * Creates a unique cache key.
- *
- * JSON.stringify prevents accidental key collisions.
- * Original text casing is preserved.
- */
 function getCacheKey(text, sourceLanguage, targetLanguage) {
   return JSON.stringify([
     text.trim(),
@@ -79,45 +71,28 @@ function getCacheKey(text, sourceLanguage, targetLanguage) {
   ]);
 }
 
-/**
- * Retrieves a cached translation.
- *
- * Expired entries are deleted immediately.
- * Recently accessed entries are moved to the end
- * to maintain LRU cache behaviour.
- */
 function getCachedTranslation(key) {
   const cachedEntry = translationCache.get(key);
 
-  if (!cachedEntry) {
-    return null;
-  }
+  if (!cachedEntry) return null;
 
   if (Date.now() > cachedEntry.expiresAt) {
     translationCache.delete(key);
     return null;
   }
 
-  // Refresh position for LRU behaviour.
+  // Move recently accessed entry to the end.
   translationCache.delete(key);
   translationCache.set(key, cachedEntry);
 
   return cachedEntry.data;
 }
 
-/**
- * Saves a successful translation.
- *
- * Removes the oldest entry when the cache
- * reaches its maximum capacity.
- */
 function saveCachedTranslation(key, data) {
-  // Refresh an existing entry.
   if (translationCache.has(key)) {
     translationCache.delete(key);
   }
 
-  // Remove oldest entry if cache is full.
   if (translationCache.size >= MAX_CACHE_ENTRIES) {
     const oldestKey = translationCache.keys().next().value;
 
@@ -140,8 +115,8 @@ app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "LEO API is running.",
-    deployment: "translation-cache-v1",
-    models: MODELS,
+    deployment: "groq-translation-v1",
+    primaryProvider: "Groq",
   });
 });
 
@@ -157,72 +132,88 @@ app.get("/health", (req, res) => {
 // ==========================================
 
 function getErrorStatus(error) {
-  if (error.status || error.code) {
-    const status = Number(error.status || error.code);
+  const status = Number(error.status);
 
-    if (status >= 400 && status <= 599) {
-      return status;
-    }
+  if (status >= 400 && status <= 599) {
+    return status;
   }
 
-  try {
-    const details = JSON.parse(error.message);
-
-    return Number(details.error?.code) || 500;
-  } catch {
-    return 500;
-  }
+  return 0;
 }
 
 function shouldTryBackup(error) {
   const status = getErrorStatus(error);
 
-  return [404, 408, 429, 500, 502, 503, 504].includes(status);
+  // Retry with the backup model for temporary
+  // provider, network, timeout, or availability errors.
+  if (status === 0) return true;
+
+  return [408, 429, 500, 502, 503, 504].includes(status);
 }
 
 // ==========================================
-// 7. GEMINI TRANSLATION SERVICE
+// 7. CORE TRANSLATION ENGINE (GROQ ONLY)
 // ==========================================
 
 async function generateTranslation(prompt) {
   let lastError;
 
-  for (let index = 0; index < MODELS.length; index++) {
-    const model = MODELS[index];
+  for (let index = 0; index < GROQ_MODELS.length; index++) {
+    const model = GROQ_MODELS[index];
+    const startedAt = Date.now();
 
     try {
-      console.log(`Trying translation model: ${model}`);
+      console.log(`[Groq] Trying model: ${model}`);
 
-      const response = await ai.models.generateContent({
+      const completion = await groq.chat.completions.create({
         model,
-        contents: prompt,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0.2,
       });
 
-      const translation = response.text?.trim();
+      const translation =
+        completion.choices[0]?.message?.content?.trim();
 
       if (!translation) {
-        throw new Error("The model returned an empty translation.");
+        throw new Error("Groq returned an empty translation.");
       }
+
+      const latencyMs = Date.now() - startedAt;
+      const fallbackUsed = index > 0;
+
+      console.log(
+        `[Groq] ${model} completed in ${latencyMs}ms`
+      );
 
       return {
         translation,
-        model,
-        fallbackUsed: index > 0,
+        model: `groq:${model}`,
+        fallbackUsed,
+        latencyMs,
       };
+
     } catch (error) {
       lastError = error;
 
-      console.error(`${model} failed:`, error.message);
+      const latencyMs = Date.now() - startedAt;
 
-      const hasBackup = index < MODELS.length - 1;
+      console.error(
+        `[Groq] ${model} failed after ${latencyMs}ms:`,
+        error.message
+      );
+
+      const hasBackup = index < GROQ_MODELS.length - 1;
 
       if (!hasBackup || !shouldTryBackup(error)) {
         throw error;
       }
 
-      console.log(
-        `Primary model UNAVAILABLE. Trying backup: ${MODELS[index + 1]}`
-      );
+      console.warn("[Groq] Switching to backup model...");
     }
   }
 
@@ -234,6 +225,8 @@ async function generateTranslation(prompt) {
 // ==========================================
 
 app.post("/api/translate", async (req, res) => {
+  const requestStartedAt = Date.now();
+
   try {
     const {
       text,
@@ -241,10 +234,7 @@ app.post("/api/translate", async (req, res) => {
       targetLanguage,
     } = req.body;
 
-    // --------------------------------------
-    // INPUT VALIDATION
-    // --------------------------------------
-
+    // Input validation.
     if (
       typeof text !== "string" ||
       !text.trim() ||
@@ -257,16 +247,13 @@ app.post("/api/translate", async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          "Provide valid text, a source language, and a target language. Text must not exceed 4,000 characters.",
+          "Provide valid text, source language, and target language. Max 4,000 characters.",
       });
     }
 
     const cleanText = text.trim();
 
-    // --------------------------------------
-    // SAME-LANGUAGE BYPASS
-    // --------------------------------------
-
+    // No AI request needed when languages are identical.
     if (
       sourceLanguage !== "auto" &&
       sourceLanguage === targetLanguage
@@ -279,13 +266,11 @@ app.post("/api/translate", async (req, res) => {
         model: "none",
         fallbackUsed: false,
         cacheStatus: "BYPASS",
+        latencyMs: 0,
       });
     }
 
-    // --------------------------------------
-    // CACHE LOOKUP
-    // --------------------------------------
-
+    // Check translation cache.
     const cacheKey = getCacheKey(
       cleanText,
       sourceLanguage,
@@ -295,7 +280,11 @@ app.post("/api/translate", async (req, res) => {
     const cachedTranslation = getCachedTranslation(cacheKey);
 
     if (cachedTranslation) {
-      console.log("Translation served from cache.");
+      const requestTime = Date.now() - requestStartedAt;
+
+      console.log(
+        `[Cache] Translation served in ${requestTime}ms`
+      );
 
       return res.json({
         success: true,
@@ -305,49 +294,44 @@ app.post("/api/translate", async (req, res) => {
         model: cachedTranslation.model,
         fallbackUsed: cachedTranslation.fallbackUsed,
         cacheStatus: "HIT",
+        latencyMs: requestTime,
       });
     }
 
-    console.log("Cache MISS. Requesting Gemini translation.");
-
-    // --------------------------------------
-    // GEMINI PROMPT
-    // --------------------------------------
-
-    const prompt = `
-You are LEO, a careful language translation assistant.
+    // Build translation prompt.
+    const prompt = `You are LEO, a careful multilingual translation assistant.
 
 Translate the user's text into ${LANGUAGES[targetLanguage]}.
 
-${
-  sourceLanguage === "auto"
-    ? "Detect the source language automatically."
-    : `The source language is ${LANGUAGES[sourceLanguage]}.`
-}
+${sourceLanguage === "auto"
+        ? "Detect the source language automatically."
+        : `The source language is ${LANGUAGES[sourceLanguage]}.`
+      }
 
-Preserve the original meaning, tone, names, and formatting.
-
-Return only the translation, without explanations or quotation marks.
+Requirements:
+- Preserve the original meaning.
+- Preserve tone and level of formality.
+- Preserve names, numbers, and important details.
+- Use natural, grammatically correct language.
+- Preserve inline formatting and paragraph structure.
+- Do not invent information.
+- Return ONLY the translation.
+- Do not include explanations or introductory notes.
 
 Text to translate:
-${cleanText}
-`;
+${cleanText}`;
 
-    // --------------------------------------
-    // GENERATE TRANSLATION
-    // --------------------------------------
-
+    // Generate translation using Groq.
     const result = await generateTranslation(prompt);
 
-    // --------------------------------------
-    // SAVE SUCCESSFUL TRANSLATION
-    // --------------------------------------
-
+    // Cache successful translation.
     saveCachedTranslation(cacheKey, result);
 
-    // --------------------------------------
-    // SEND RESPONSE
-    // --------------------------------------
+    const requestTime = Date.now() - requestStartedAt;
+
+    console.log(
+      `[Translation] Completed in ${requestTime}ms using ${result.model}`
+    );
 
     return res.json({
       success: true,
@@ -357,28 +341,18 @@ ${cleanText}
       model: result.model,
       fallbackUsed: result.fallbackUsed,
       cacheStatus: "MISS",
+      latencyMs: result.latencyMs,
     });
 
   } catch (error) {
-    const status = getErrorStatus(error);
-
     console.error(
-      "Translation service failed:",
+      "[Translation Endpoint Exception]:",
       error.message
     );
 
-    if ([429, 500, 502, 503, 504].includes(status)) {
-      return res.status(503).json({
-        success: false,
-        message:
-          "LEO's translation service is temporarily unavailable. Please try again shortly.",
-      });
-    }
-
     return res.status(502).json({
       success: false,
-      message:
-        "LEO couldn't complete this translation. Please try again.",
+      message: "LEO could not complete the translation. Please try again.",
     });
   }
 });
@@ -387,6 +361,6 @@ ${cleanText}
 // 9. START SERVER
 // ==========================================
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`LEO API running on port ${PORT}`);
+app.listen(PORT, () => {
+  console.log(`LEO Groq API running on port ${PORT}`);
 });
