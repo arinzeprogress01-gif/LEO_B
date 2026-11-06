@@ -4,6 +4,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 
+import { LANGUAGES } from "./src/config/languages.js";
+
 dotenv.config();
 
 const app = express();
@@ -36,16 +38,12 @@ const GROQ_MODELS = [
 // 2. SUPPORTED LANGUAGES
 // ==========================================
 
-const LANGUAGES = {
-  auto: "automatically detected",
-  en: "English",
-  fr: "French",
-  es: "Spanish",
-  de: "German",
-  pt: "Portuguese",
-  ig: "Igbo",
-  yo: "Yoruba",
-};
+const LANGUAGE_NAMES = Object.fromEntries(
+  Object.entries(LANGUAGES).map(([code, language]) => [
+    code,
+    language.name,
+  ])
+);
 
 // ==========================================
 // 3. EXPRESS MIDDLEWARE
@@ -301,11 +299,11 @@ app.post("/api/translate", async (req, res) => {
     // Build translation prompt.
     const prompt = `You are LEO, a careful multilingual translation assistant.
 
-Translate the user's text into ${LANGUAGES[targetLanguage]}.
+Translate the user's text into ${LANGUAGE_NAMES[targetLanguage]}.
 
 ${sourceLanguage === "auto"
         ? "Detect the source language automatically."
-        : `The source language is ${LANGUAGES[sourceLanguage]}.`
+        : `The source language is ${LANGUAGE_NAMES[sourceLanguage]}.`
       }
 
 Requirements:
