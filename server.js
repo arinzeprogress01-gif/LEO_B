@@ -6,6 +6,11 @@ import Groq from "groq-sdk";
 
 import { LANGUAGES } from "./src/config/languages.js";
 
+import {
+  generateSpeech,
+  isTtsLanguageSupported
+} from "./src/services/audio/elevenlabs.service.js";
+
 dotenv.config();
 
 const app = express();
@@ -355,6 +360,66 @@ ${cleanText}`;
   }
 });
 
+app.post("/api/audio/speech", async (req, res) => {
+  try {
+    const { text, languageCode } = req.body;
+
+    if (!text || typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Text is required."
+      });
+    }
+
+    if (text.length > 5000) {
+      return res.status(400).json({
+        success: false,
+        message: "Text cannot exceed 5000 characters."
+      });
+    }
+
+    if (
+      !languageCode ||
+      typeof languageCode !== "string"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid language code is required."
+      });
+    }
+
+    if (!isTtsLanguageSupported(languageCode)) {
+      return res.status(422).json({
+        success: false,
+        message: `Speech generation is not currently available for ${languageCode}.`,
+        languageCode
+      });
+    }
+
+    const result = await generateSpeech(
+      text.trim(),
+      languageCode
+    );
+
+    res.set({
+      "Content-Type": result.contentType,
+      "Content-Length": result.audioBuffer.length,
+      "Cache-Control": "private, no-store",
+      "X-LEO-TTS-Model": result.model,
+      "X-LEO-TTS-Language": result.languageCode
+    });
+
+    return res.status(200).send(result.audioBuffer);
+
+  } catch (error) {
+    console.error("LEO TTS Error:", error.message);
+
+    return res.status(502).json({
+      success: false,
+      message: "LEO could not generate speech right now."
+    });
+  }
+});
 // ==========================================
 // 9. START SERVER
 // ==========================================
