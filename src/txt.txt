@@ -1,1 +1,7 @@
 curl -X POST http://localhost:8080/api/audio/speech -H "Content-Type: application/json" -d "{\"text\":\"Hello, welcome to LEO.\",\"languageCode\":\"en\"}" --output leo-test.mp3
+
+curl -H "Authorization: " http://localhost:8080/api/identity/guest/me
+
+curl http://localhost:8080/api/identity/guest/me
+
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoiZ3Vlc3QiLCJpYXQiOjE3OTQwMjQwNjAsImV4cCI6MTgyNTU2MDA2MCwiYXVkIjoibGVvLWNsaWVudCIsImlzcyI6Imxlby1hcGkiLCJzdWIiOiI0YTQzNmNhNS0zNWUyLTRlYjQtYmY3MS00N2EwNzUyOTM1NDkifQ.8PI8bvLj62FEmAyAmNxBthUF4QOTxgzMxzpv5FuF5aA" http://localhost:8080/api/identity/guest/me

@@ -4,12 +4,17 @@ import cors from "cors";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 
+import connectDatabase from "./src/config/database.js"
+
 import { LANGUAGES } from "./src/config/languages.js";
 
 import {
   generateSpeech,
   isTtsLanguageSupported
 } from "./src/services/audio/elevenlabs.service.js";
+
+import createGuestIdentity from "./src/services/identity/guestIdentity.service.js";
+import guestAuth from "./src/middleware/guestAuth.middleware.js";
 
 dotenv.config();
 
@@ -420,10 +425,63 @@ app.post("/api/audio/speech", async (req, res) => {
     });
   }
 });
+
+// Create a new anonymous guest identity.
+app.post("/api/identity/guest", async (req, res) => {
+  try {
+    const identity = await createGuestIdentity();
+
+    return res.status(201).json({
+      success: true,
+      message: "Guest identity created successfully.",
+      data: identity
+    });
+
+  } catch (error) {
+    console.error("Guest identity creation failed:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to create guest identity."
+    });
+  }
+});
+
+
+// Verify the identity of the currently authenticated guest.
+app.get("/api/identity/guest/me", guestAuth, async (req, res) => {
+  try {
+    req.guest.lastActiveAt = new Date();
+    await req.guest.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Guest identity verified.",
+      data: {
+        guestId: req.guest.guestId,
+        status: req.guest.status,
+        lastActiveAt: req.guest.lastActiveAt
+      }
+    });
+
+  } catch (error) {
+    console.error("Guest identity verification failed:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to verify guest identity."
+    });
+  }
+});
+
+
+
 // ==========================================
 // 9. START SERVER
 // ==========================================
 
-app.listen(PORT, () => {
-  console.log(`LEO Groq API running on port ${PORT}`);
+connectDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`LEO Groq API running on port ${PORT}`);
+  });
 });
