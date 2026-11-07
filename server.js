@@ -15,6 +15,7 @@ import {
 
 import createGuestIdentity from "./src/services/identity/guestIdentity.service.js";
 import guestAuth from "./src/middleware/guestAuth.middleware.js";
+import translationRoutes from "./src/routes/translation.routes.js";
 
 dotenv.config();
 
@@ -61,6 +62,12 @@ const LANGUAGE_NAMES = Object.fromEntries(
 
 app.use(cors());
 app.use(express.json({ limit: "20kb" }));
+
+// ==========================================
+// TRANSLATION HISTORY ROUTES
+// ==========================================
+
+app.use("/api/translations", translationRoutes);
 
 // ==========================================
 // 4. TRANSLATION CACHE (LRU MECHANISM)

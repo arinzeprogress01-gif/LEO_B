@@ -11,6 +11,7 @@ const leoDataSchema = new mongoose.Schema(
                 "user",
                 "conversation",
                 "message",
+                "translation",
                 "saved_phrase",
                 "learning_progress",
                 "preference"
@@ -29,7 +30,7 @@ const leoDataSchema = new mongoose.Schema(
     }
 );
 
-// Helps retrieve records by type and owner.
+// Helps retrieve records by type, owner and creation date.
 leoDataSchema.index({
     recordType: 1,
     ownerId: 1,
